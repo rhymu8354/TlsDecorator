@@ -72,15 +72,15 @@ namespace {
             return 0;
         }
 
-        virtual ssize_t tls_write(struct tls *_ctx, const void *_buf, size_t _buflen) {
+        virtual ssize_t tls_write(struct tls *_ctx, const void *_buf, size_t _buflen) override {
             return 0;
         }
 
-        virtual int tls_close(struct tls *_ctx) {
+        virtual int tls_close(struct tls *_ctx) override {
             return 0;
         }
 
-        virtual void tls_free(struct tls *_ctx) {
+        virtual void tls_free(struct tls *_ctx) override {
         }
     };
 
