@@ -11,7 +11,6 @@
 #include <condition_variable>
 #include <mutex>
 #include <stddef.h>
-#include <stdio.h>
 #include <SystemAbstractions/DiagnosticsSender.hpp>
 #include <thread>
 #include <TlsDecorator/TlsShim.hpp>
@@ -114,6 +113,12 @@ namespace TlsDecorator {
         bool canWrite = true;
 
         /**
+         * This flag indicates whether or not the upper layer has indicated
+         * a graceful close should be done.
+         */
+        bool upperLayerClosed = false;
+
+        /**
          * This thread performs all TLS read/write asynchronously.
          */
         std::thread worker;
@@ -141,7 +146,9 @@ namespace TlsDecorator {
          */
         void SecureMessageReceived(const std::vector< uint8_t >& data) {
             std::lock_guard< decltype(mutex) > lock(mutex);
-            printf("received secure data (%zu more bytes, %zu total)\n", data.size(), data.size() + receiveBufferSecure.size());
+            diagnosticsSender.SendDiagnosticInformationFormatted(
+                0, "receive(%zu)", data.size()
+            );
             receiveBufferSecure.insert(
                 receiveBufferSecure.end(),
                 data.begin(),
@@ -154,16 +161,17 @@ namespace TlsDecorator {
          * This method is called when the lower-layer connection is broken.
          */
         void ConnectionBroken() {
-            printf("other end broke\n");
-            {
-                std::lock_guard< decltype(mutex) > lock(mutex);
-                open = false;
-                wakeCondition.notify_all();
-            }
+            std::unique_lock< decltype(mutex) > lock(mutex);
+            diagnosticsSender.SendDiagnosticInformationString(
+                0, "Remote closed"
+            );
+            open = false;
+            wakeCondition.notify_all();
             if (
                 receiveBufferSecure.empty()
                 && (brokenDelegate != nullptr)
             ) {
+                lock.unlock();
                 brokenDelegate(false);
             }
         }
@@ -173,7 +181,6 @@ namespace TlsDecorator {
          * I/O with the TLS layer.
          */
         void Worker() {
-            printf("worker: starting\n");
             std::unique_lock< decltype(mutex) > lock(mutex);
             bool tryRead = true;
             while (!stopWorker) {
@@ -182,7 +189,9 @@ namespace TlsDecorator {
                     && canWrite
                     && open
                 ) {
-                    printf("tls_write (%zu)\n", sendBuffer.size());
+                    diagnosticsSender.SendDiagnosticInformationFormatted(
+                        0, "tls_write(%zu)", sendBuffer.size()
+                    );
                     const auto amount = selectedTlsShim->tls_write(
                         tlsImpl.get(),
                         sendBuffer.data(),
@@ -190,15 +199,33 @@ namespace TlsDecorator {
                     );
                     if (amount == TLS_WANT_POLLIN) {
                         // Can't write any more until we read some more...
-                        printf("tls_write returned: TLS_WANT_POLLIN\n");
+                        diagnosticsSender.SendDiagnosticInformationFormatted(
+                            0, "tls_write(%zu) -> TLS_WANT_POLLIN", sendBuffer.size()
+                        );
                         canWrite = false;
                     } else if (amount < 0) {
-                        printf("tls_write returned %d -- ERROR?\n", (int)amount);
+                        const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsImpl.get());
+                        diagnosticsSender.SendDiagnosticInformationFormatted(
+                            SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                            "tls_write(%zu) -> error: %s",
+                            sendBuffer.size(),
+                            tlsErrorMessage
+                        );
                         lowerLayer->Close(false);
+                        break;
                     } else {
-                        printf("tls_write returned %zd\n", (size_t)amount);
+                        diagnosticsSender.SendDiagnosticInformationFormatted(
+                            0, "tls_write(%zu) -> %zu", sendBuffer.size(), (size_t)amount
+                        );
                         if ((size_t)amount == sendBuffer.size()) {
                             sendBuffer.clear();
+                            if (upperLayerClosed) {
+                                diagnosticsSender.SendDiagnosticInformationString(
+                                    0, "Closed gracefully"
+                                );
+                                lowerLayer->Close(true);
+                                break;
+                            }
                         } else {
                             sendBuffer.erase(
                                 sendBuffer.begin(),
@@ -211,27 +238,34 @@ namespace TlsDecorator {
                     !receiveBufferSecure.empty()
                     || tryRead
                 ) {
-                    printf("tls_read (%zu)\n", DECRYPTED_BUFFER_SIZE);
                     tryRead = true;
                     receiveBufferDecrypted.resize(DECRYPTED_BUFFER_SIZE);
+                    diagnosticsSender.SendDiagnosticInformationString(
+                        0, "tls_read"
+                    );
                     const auto amount = selectedTlsShim->tls_read(
                         tlsImpl.get(),
                         receiveBufferDecrypted.data(),
                         receiveBufferDecrypted.size()
                     );
                     if (amount == TLS_WANT_POLLIN) {
-                        printf("tls_read returned: TLS_WANT_POLLIN\n");
                         // Can't read any more because we're out of data.
-                    } else if (amount == TLS_WANT_POLLOUT) {
-                        // Can't read any more until we write some more...
-                        // (I think we shouldn't ever get here, but let's see...
-                        printf("TLS_WANT_POLLOUT\n");
+                        diagnosticsSender.SendDiagnosticInformationString(
+                            0, "tls_read -> TLS_WANT_POLLIN"
+                        );
                     } else if (amount < 0) {
                         const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsImpl.get());
-                        printf("tls_read returned %d -- ERROR? tls_error says: \"%s\"\n", (int)amount, tlsErrorMessage);
+                        diagnosticsSender.SendDiagnosticInformationFormatted(
+                            SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                            "tls_read -> error: %s",
+                            tlsErrorMessage
+                        );
                         lowerLayer->Close(false);
+                        break;
                     } else if (amount > 0) {
-                        printf("tls_read returned %zd\n", (size_t)amount);
+                        diagnosticsSender.SendDiagnosticInformationFormatted(
+                            0, "tls_read -> %zu", (size_t)amount
+                        );
                         receiveBufferDecrypted.resize((size_t)amount);
                         if (messageReceivedDelegate != nullptr) {
                             lock.unlock();
@@ -263,21 +297,12 @@ namespace TlsDecorator {
                         );
                     }
                 );
-                printf("worker: wake up\n");
             }
-            printf("worker: stopping\n");
         }
     };
 
     TlsDecorator::~TlsDecorator() noexcept {
-        if (impl_->worker.joinable()) {
-            {
-                std::lock_guard< decltype(impl_->mutex) > lock(impl_->mutex);
-                impl_->stopWorker = true;
-                impl_->wakeCondition.notify_all();
-            }
-            impl_->worker.join();
-        }
+        Close(false);
     }
 
     TlsDecorator::TlsDecorator()
@@ -327,7 +352,6 @@ namespace TlsDecorator {
                 selectedTlsShim->tls_free(p);
             }
         );
-        printf("tls_configure()...\n");
 
         // ----------------------------------
         // I don't know about this, but it was in the example....
@@ -340,21 +364,25 @@ namespace TlsDecorator {
         if (selectedTlsShim->tls_configure(impl_->tlsImpl.get(), impl_->tlsConfig.get()) != 0) {
             return false;
         }
-        printf("tls_connect_cbs()...\n");
         if (
             selectedTlsShim->tls_connect_cbs(
                 impl_->tlsImpl.get(),
                 [](struct tls *_ctx, void *_buf, size_t _buflen, void *_cb_arg){
                     const auto self = (TlsDecorator*)_cb_arg;
                     std::lock_guard< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
-                    printf("_read_cb(%zu) -- %zu is available\n", _buflen, self->impl_->receiveBufferSecure.size());
                     const auto amt = std::min(_buflen, self->impl_->receiveBufferSecure.size());
                     if (
                         (amt == 0)
                         && self->impl_->open
                     ) {
+                        self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                            0, "_read_cb(%zu) -> TLS_WANT_POLLIN", _buflen
+                        );
                         return (ssize_t)TLS_WANT_POLLIN;
                     }
+                    self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                        0, "_read_cb(%zu) -> %zu (of %zu)", _buflen, amt, self->impl_->receiveBufferSecure.size()
+                    );
                     self->impl_->canWrite = true;
                     (void)memcpy(_buf, self->impl_->receiveBufferSecure.data(), amt);
                     if (amt == self->impl_->receiveBufferSecure.size()) {
@@ -368,9 +396,11 @@ namespace TlsDecorator {
                     return (ssize_t)amt;
                 },
                 [](struct tls *_ctx, const void *_buf, size_t _buflen, void *_cb_arg){
-                    printf("_write_cb(%zu)\n", _buflen);
                     const auto self = (TlsDecorator*)_cb_arg;
                     std::lock_guard< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
+                    self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                        0, "_write_cb(%zu)", _buflen
+                    );
                     if (self->impl_->open) {
                         const auto bufBytes = (const uint8_t*)_buf;
                         self->impl_->lowerLayer->SendMessage(
@@ -385,7 +415,14 @@ namespace TlsDecorator {
         ) {
             return false;
         }
-        printf("TLS connected... starting worker\n");
+        if (
+            !impl_->lowerLayer->Process(
+                std::bind(&Impl::SecureMessageReceived, impl_.get(), std::placeholders::_1),
+                std::bind(&Impl::ConnectionBroken, impl_.get())
+            )
+        ) {
+            return false;
+        }
         impl_->stopWorker = false;
         impl_->worker = std::thread(&TlsDecorator::Impl::Worker, impl_.get());
         return true;
@@ -400,20 +437,22 @@ namespace TlsDecorator {
     }
 
     bool TlsDecorator::IsConnected() const {
-        return false;
+        return impl_->lowerLayer->IsConnected();
     }
 
     uint32_t TlsDecorator::GetBoundAddress() const {
-        return 0;
+        return impl_->lowerLayer->GetBoundAddress();
     }
 
     uint16_t TlsDecorator::GetBoundPort() const {
-        return 0;
+        return impl_->lowerLayer->GetBoundPort();
     }
 
     void TlsDecorator::SendMessage(const std::vector< uint8_t >& message) {
-        printf("queueing %zu to send to TLS\n", message.size());
         std::unique_lock< decltype(impl_->mutex) > lock(impl_->mutex);
+        impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+            0, "send(%zu)", message.size()
+        );
         impl_->sendBuffer.insert(
             impl_->sendBuffer.end(),
             message.begin(),
@@ -423,13 +462,30 @@ namespace TlsDecorator {
     }
 
     void TlsDecorator::Close(bool clean) {
-        impl_->diagnosticsSender.SendDiagnosticInformationString(
-            1, "Close was called"
-        );
-        if (impl_->lowerLayer == nullptr) {
+        std::unique_lock< decltype(impl_->mutex) > lock(impl_->mutex);
+        if (!impl_->worker.joinable()) {
             return;
         }
-        impl_->lowerLayer->Close(false);
+        impl_->upperLayerClosed = true;
+        if (
+            !impl_->sendBuffer.empty()
+            && clean
+        ) {
+            impl_->diagnosticsSender.SendDiagnosticInformationString(
+                0, "Closing gracefully"
+            );
+            return;
+        }
+        impl_->stopWorker = true;
+        impl_->wakeCondition.notify_all();
+        lock.unlock();
+        impl_->worker.join();
+        impl_->diagnosticsSender.SendDiagnosticInformationString(
+            0, "Closed gracefully"
+        );
+        if (impl_->lowerLayer != nullptr) {
+            impl_->lowerLayer->Close(true);
+        }
     }
 
 }
