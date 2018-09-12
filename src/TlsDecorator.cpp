@@ -220,10 +220,6 @@ namespace TlsDecorator {
                         if ((size_t)amount == sendBuffer.size()) {
                             sendBuffer.clear();
                             if (upperLayerClosed) {
-                                diagnosticsSender.SendDiagnosticInformationString(
-                                    0, "Closed gracefully"
-                                );
-                                lowerLayer->Close(true);
                                 break;
                             }
                         } else {
@@ -297,6 +293,14 @@ namespace TlsDecorator {
                         );
                     }
                 );
+            }
+            if (upperLayerClosed) {
+                diagnosticsSender.SendDiagnosticInformationString(
+                    0, "Closed gracefully"
+                );
+                if (lowerLayer != nullptr) {
+                    lowerLayer->Close(true);
+                }
             }
         }
     };
@@ -477,14 +481,10 @@ namespace TlsDecorator {
             return;
         }
         impl_->stopWorker = true;
-        impl_->wakeCondition.notify_all();
-        lock.unlock();
-        impl_->worker.join();
-        impl_->diagnosticsSender.SendDiagnosticInformationString(
-            0, "Closed gracefully"
-        );
-        if (impl_->lowerLayer != nullptr) {
-            impl_->lowerLayer->Close(true);
+        if (std::this_thread::get_id() != impl_->worker.get_id()) {
+            impl_->wakeCondition.notify_all();
+            lock.unlock();
+            impl_->worker.join();
         }
     }
 
