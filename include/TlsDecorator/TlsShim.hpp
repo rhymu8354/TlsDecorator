@@ -12,6 +12,8 @@
  */
 
 #include <tls.h>
+#include <openssl/bio.h>
+#include <openssl/pem.h>
 
 namespace TlsDecorator {
 
@@ -30,6 +32,14 @@ namespace TlsDecorator {
      */
     class TlsShim {
     public:
+        virtual BIO *BIO_new(const BIO_METHOD *type);
+        virtual BIO *BIO_new_mem_buf(const void *buf, int len);
+        virtual long BIO_ctrl(BIO *bp, int cmd, long larg, void *parg);
+        virtual void BIO_free_all(BIO *a);
+        virtual int PEM_write_bio_PrivateKey(BIO *bp, EVP_PKEY *x, const EVP_CIPHER *enc,
+            unsigned char *kstr, int klen, pem_password_cb *cb, void *u);
+        virtual EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u);
+        virtual void EVP_PKEY_free(EVP_PKEY *pkey);
         virtual const char *tls_error(struct tls *_ctx);
         virtual struct tls_config *tls_config_new(void);
         virtual int tls_config_set_protocols(struct tls_config *_config, uint32_t _protocols);
@@ -37,9 +47,14 @@ namespace TlsDecorator {
         virtual void tls_config_insecure_noverifyname(struct tls_config *_config);
         virtual int tls_config_set_ca_mem(struct tls_config *_config, const uint8_t *_ca,
             size_t _len);
+        virtual int tls_config_set_cert_mem(struct tls_config *_config, const uint8_t *_cert,
+            size_t _len);
+        virtual int tls_config_set_key_mem(struct tls_config *_config, const uint8_t *_key,
+            size_t _len);
         virtual int tls_configure(struct tls *_ctx, struct tls_config *_config);
         virtual void tls_config_free(struct tls_config *_config);
         virtual struct tls *tls_client(void);
+        virtual struct tls *tls_server(void);
         virtual int tls_connect_cbs(struct tls *_ctx, tls_read_cb _read_cb,
             tls_write_cb _write_cb, void *_cb_arg, const char *_servername);
         virtual ssize_t tls_read(struct tls *_ctx, void *_buf, size_t _buflen);

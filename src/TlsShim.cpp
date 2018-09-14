@@ -22,6 +22,36 @@ namespace {
 
 namespace TlsDecorator {
 
+    BIO *TlsShim::BIO_new(const BIO_METHOD *type) {
+        return ::BIO_new(type);
+    }
+
+    BIO *TlsShim::BIO_new_mem_buf(const void *buf, int len) {
+        return ::BIO_new_mem_buf(buf, len);
+    }
+
+    long TlsShim::BIO_ctrl(BIO *bp, int cmd, long larg, void *parg) {
+        return ::BIO_ctrl(bp, cmd, larg, parg);
+    }
+
+    void TlsShim::BIO_free_all(BIO *a) {
+        ::BIO_free_all(a);
+    }
+
+    EVP_PKEY *TlsShim::PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u) {
+        return ::PEM_read_bio_PrivateKey(bp, x, cb, u);
+    }
+
+    int TlsShim::PEM_write_bio_PrivateKey(BIO *bp, EVP_PKEY *x, const EVP_CIPHER *enc,
+        unsigned char *kstr, int klen, pem_password_cb *cb, void *u)
+    {
+        return ::PEM_write_bio_PrivateKey(bp, x, enc, kstr, klen, cb, u);
+    }
+
+    void TlsShim::EVP_PKEY_free(EVP_PKEY *pkey) {
+        ::EVP_PKEY_free(pkey);
+    }
+
     const char *TlsShim::tls_error(struct tls *_ctx) {
         return ::tls_error(_ctx);
     }
@@ -48,6 +78,18 @@ namespace TlsDecorator {
         return ::tls_config_set_ca_mem(_config, _ca, _len);
     }
 
+    int TlsShim::tls_config_set_cert_mem(struct tls_config *_config, const uint8_t *_cert,
+        size_t _len)
+    {
+        return ::tls_config_set_cert_mem(_config, _cert, _len);
+    }
+
+    int TlsShim::tls_config_set_key_mem(struct tls_config *_config, const uint8_t *_key,
+        size_t _len)
+    {
+        return ::tls_config_set_key_mem(_config, _key, _len);
+    }
+
     int TlsShim::tls_configure(struct tls *_ctx, struct tls_config *_config) {
         return ::tls_configure(_ctx, _config);
     }
@@ -58,6 +100,10 @@ namespace TlsDecorator {
 
     struct tls *TlsShim::tls_client(void) {
         return ::tls_client();
+    }
+
+    struct tls *TlsShim::tls_server(void) {
+        return ::tls_server();
     }
 
     int TlsShim::tls_connect_cbs(struct tls *_ctx, tls_read_cb _read_cb,
