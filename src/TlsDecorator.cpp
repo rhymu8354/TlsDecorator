@@ -70,6 +70,12 @@ namespace TlsDecorator {
         std::unique_ptr< tls_config, std::function< void(tls_config*) > > tlsConfig;
 
         /**
+         * This is the concatenation of the root Certificate Authority
+         * (CA) certificates to trust, in PEM format.
+         */
+        std::vector< uint8_t > caCerts;
+
+        /**
          * This is used to synchronize access to the state of this object.
          */
         std::recursive_mutex mutex;
@@ -317,12 +323,14 @@ namespace TlsDecorator {
 
     void TlsDecorator::Configure(
         std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer,
+        const std::string& caCerts,
         const std::string& serverName
     ) {
         if (impl_->worker.joinable()) {
             return;
         }
         impl_->lowerLayer = lowerLayer;
+        impl_->caCerts.assign(caCerts.begin(), caCerts.end());
         impl_->serverName = serverName;
     }
 
@@ -357,11 +365,11 @@ namespace TlsDecorator {
             }
         );
 
-        // ----------------------------------
-        // I don't know about this, but it was in the example....
-        selectedTlsShim->tls_config_insecure_noverifycert(impl_->tlsConfig.get());
-        selectedTlsShim->tls_config_insecure_noverifyname(impl_->tlsConfig.get());
-        // ----------------------------------
+        selectedTlsShim->tls_config_set_ca_mem(
+            impl_->tlsConfig.get(),
+            impl_->caCerts.data(),
+            impl_->caCerts.size()
+        );
 
         selectedTlsShim->tls_config_set_protocols(impl_->tlsConfig.get(), TLS_PROTOCOLS_DEFAULT);
 

@@ -35,6 +35,8 @@ namespace TlsDecorator {
         virtual int tls_config_set_protocols(struct tls_config *_config, uint32_t _protocols);
         virtual void tls_config_insecure_noverifycert(struct tls_config *_config);
         virtual void tls_config_insecure_noverifyname(struct tls_config *_config);
+        virtual int tls_config_set_ca_mem(struct tls_config *_config, const uint8_t *_ca,
+            size_t _len);
         virtual int tls_configure(struct tls *_ctx, struct tls_config *_config);
         virtual void tls_config_free(struct tls_config *_config);
         virtual struct tls *tls_client(void);

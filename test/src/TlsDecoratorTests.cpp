@@ -33,6 +33,7 @@ namespace {
         bool tlsConfigProtocolSetCalled = false;
         uint32_t tlsConfigProtocolSetProtocols = 0;
         bool tlsConfigureCalled = false;
+        std::string caCerts;
         bool tlsReadCalled = false;
         bool tlsWriteCalled = false;
         bool stallTlsWrite = false;
@@ -100,6 +101,16 @@ namespace {
         }
 
         virtual void tls_config_insecure_noverifyname(struct tls_config *_config) override {
+        }
+
+        virtual int tls_config_set_ca_mem(struct tls_config *_config, const uint8_t *_ca,
+            size_t _len) override
+        {
+            caCerts = std::string(
+                (const char*)_ca,
+                _len
+            );
+            return 0;
         }
 
         virtual int tls_configure(struct tls *_ctx, struct tls_config *_config) override {
@@ -384,6 +395,7 @@ TEST_F(TlsDecoratorTests, DiagnosticsSubscription) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -437,6 +449,7 @@ TEST_F(TlsDecoratorTests, ConnectForwardedWithoutStartingTls) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -452,6 +465,7 @@ TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessing) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -474,6 +488,7 @@ TEST_F(TlsDecoratorTests, PeerAddressAndPortAreForwarded) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -487,6 +502,7 @@ TEST_F(TlsDecoratorTests, IsConnectedForwarded) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     mockConnection.isConnectedCalled = false;
@@ -506,6 +522,7 @@ TEST_F(TlsDecoratorTests, BoundAddressAndPortAreForwarded) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -519,6 +536,7 @@ TEST_F(TlsDecoratorTests, SendMessageQueuesDataWithTlsWrite) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -562,6 +580,7 @@ TEST_F(TlsDecoratorTests, SecureDataReceivedResultsInDecryptedDataDelivered) {
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -630,6 +649,7 @@ TEST_F(TlsDecoratorTests, RemoteConnectionBreakForwardedWhenNoSecureDataBuffered
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -686,6 +706,7 @@ TEST_F(TlsDecoratorTests, CleanCloseProcessesAllQueuedTlsWritesBeforeActuallyClo
             &mockConnection,
             [](MockConnection*){}
         ),
+        "Pretend there are certificates here, ok?",
         "Pepe"
     );
     (void)decorator.Connect(42, 99);
@@ -731,5 +752,28 @@ TEST_F(TlsDecoratorTests, CleanCloseProcessesAllQueuedTlsWritesBeforeActuallyClo
         mockConnection.Await(
             [this]{ return mockConnection.closeCalled; }
         )
+    );
+}
+
+TEST_F(TlsDecoratorTests, ConfigureCACertificates) {
+    // Pass in something for CA certificates.
+    decorator.Configure(
+        std::shared_ptr< MockConnection >(
+            &mockConnection,
+            [](MockConnection*){}
+        ),
+        "Pretend there are certificates here, ok?",
+        "Pepe"
+    );
+    (void)decorator.Connect(42, 99);
+    (void)decorator.Process(
+        [](const std::vector< uint8_t >& message){},
+        [](bool graceful){}
+    );
+
+    // Verify the CA certificates were configured.
+    EXPECT_EQ(
+        "Pretend there are certificates here, ok?",
+        mockTls.caCerts
     );
 }

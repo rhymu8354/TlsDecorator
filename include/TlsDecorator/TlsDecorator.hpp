@@ -46,12 +46,17 @@ namespace TlsDecorator {
          * @param[in] lowerLayer
          *     This is the lower-level connection to decorate.
          *
+         * @param[in] caCerts
+         *     This is the concatenation of the root Certificate Authority
+         *     (CA) certificates to trust, in PEM format.
+         *
          * @param[in] serverName
          *     This is the name of the server with which to connect
          *     as a TLS client.
          */
         void Configure(
             std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer,
+            const std::string& caCerts,
             const std::string& serverName
         );
 

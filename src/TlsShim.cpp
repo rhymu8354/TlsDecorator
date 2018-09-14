@@ -42,6 +42,12 @@ namespace TlsDecorator {
         ::tls_config_insecure_noverifyname(_config);
     }
 
+    int TlsShim::tls_config_set_ca_mem(struct tls_config *_config, const uint8_t *_ca,
+        size_t _len)
+    {
+        return ::tls_config_set_ca_mem(_config, _ca, _len);
+    }
+
     int TlsShim::tls_configure(struct tls *_ctx, struct tls_config *_config) {
         return ::tls_configure(_ctx, _config);
     }
