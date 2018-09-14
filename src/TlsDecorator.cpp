@@ -417,6 +417,12 @@ namespace TlsDecorator {
                 impl_->serverName.c_str()
             ) != 0
         ) {
+            const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsImpl.get());
+            impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                "tls_connect_cbs -> error: %s",
+                tlsErrorMessage
+            );
             return false;
         }
         if (
