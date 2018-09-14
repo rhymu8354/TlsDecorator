@@ -321,7 +321,7 @@ namespace TlsDecorator {
         impl_->receiveBufferDecrypted.reserve(DECRYPTED_BUFFER_SIZE);
     }
 
-    void TlsDecorator::Configure(
+    void TlsDecorator::ConfigureAsClient(
         std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer,
         const std::string& caCerts,
         const std::string& serverName

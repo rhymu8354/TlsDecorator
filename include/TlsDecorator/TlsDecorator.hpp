@@ -54,7 +54,7 @@ namespace TlsDecorator {
          *     This is the name of the server with which to connect
          *     as a TLS client.
          */
-        void Configure(
+        void ConfigureAsClient(
             std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer,
             const std::string& caCerts,
             const std::string& serverName

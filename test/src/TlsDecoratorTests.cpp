@@ -390,7 +390,7 @@ TEST_F(TlsDecoratorTests, DiagnosticsSubscription) {
             );
         }
     );
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -444,7 +444,7 @@ TEST_F(TlsDecoratorTests, DiagnosticsUnsubscription) {
 }
 
 TEST_F(TlsDecoratorTests, ConnectForwardedWithoutStartingTls) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -460,7 +460,7 @@ TEST_F(TlsDecoratorTests, ConnectForwardedWithoutStartingTls) {
 }
 
 TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessing) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -483,7 +483,7 @@ TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessing) {
 }
 
 TEST_F(TlsDecoratorTests, PeerAddressAndPortAreForwarded) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -497,7 +497,7 @@ TEST_F(TlsDecoratorTests, PeerAddressAndPortAreForwarded) {
 }
 
 TEST_F(TlsDecoratorTests, IsConnectedForwarded) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -517,7 +517,7 @@ TEST_F(TlsDecoratorTests, IsConnectedForwarded) {
 }
 
 TEST_F(TlsDecoratorTests, BoundAddressAndPortAreForwarded) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -531,7 +531,7 @@ TEST_F(TlsDecoratorTests, BoundAddressAndPortAreForwarded) {
 }
 
 TEST_F(TlsDecoratorTests, SendMessageQueuesDataWithTlsWrite) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -575,7 +575,7 @@ TEST_F(TlsDecoratorTests, SendMessageQueuesDataWithTlsWrite) {
 }
 
 TEST_F(TlsDecoratorTests, SecureDataReceivedResultsInDecryptedDataDelivered) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -644,7 +644,7 @@ TEST_F(TlsDecoratorTests, SecureDataReceivedResultsInDecryptedDataDelivered) {
 }
 
 TEST_F(TlsDecoratorTests, RemoteConnectionBreakForwardedWhenNoSecureDataBuffered) {
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -701,7 +701,7 @@ TEST_F(TlsDecoratorTests, RemoteConnectionBreakForwardedWhenNoSecureDataBuffered
 
 TEST_F(TlsDecoratorTests, CleanCloseProcessesAllQueuedTlsWritesBeforeActuallyClosing) {
     // Setup
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
@@ -757,7 +757,7 @@ TEST_F(TlsDecoratorTests, CleanCloseProcessesAllQueuedTlsWritesBeforeActuallyClo
 
 TEST_F(TlsDecoratorTests, ConfigureCACertificates) {
     // Pass in something for CA certificates.
-    decorator.Configure(
+    decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
             [](MockConnection*){}
