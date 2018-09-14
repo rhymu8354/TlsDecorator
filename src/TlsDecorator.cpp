@@ -29,6 +29,30 @@ namespace {
 namespace TlsDecorator {
 
     struct TlsDecorator::Impl {
+        // Types
+
+        /**
+         * These are the different modes the decorator can be in.
+         */
+        enum class Mode {
+            /**
+             * In this mode, the decorator is not yet configured.
+             */
+            None,
+
+            /**
+             * In this mode, the decorator is operating the TLS layer
+             * as a client.
+             */
+            Client,
+
+            /**
+             * In this mode, the decorator is operating the TLS layer
+             * as a server.
+             */
+            Server,
+        };
+
         // Properties
 
         /**
@@ -70,10 +94,30 @@ namespace TlsDecorator {
         std::unique_ptr< tls_config, std::function< void(tls_config*) > > tlsConfig;
 
         /**
+         * This indiates the current mode of the decorator.
+         */
+        Mode mode = Mode::None;
+
+        /**
          * This is the concatenation of the root Certificate Authority
          * (CA) certificates to trust, in PEM format.
          */
         std::vector< uint8_t > caCerts;
+
+        /**
+         * This is the server's certificate, in PEM format.
+         */
+        std::vector< uint8_t > cert;
+
+        /**
+         * This is the server's private key, in PEM format.
+         */
+        std::vector< uint8_t > key;
+
+        /**
+         * This is the password for the server's private key.
+         */
+        std::string password;
 
         /**
          * This is used to synchronize access to the state of this object.
@@ -332,6 +376,23 @@ namespace TlsDecorator {
         impl_->lowerLayer = lowerLayer;
         impl_->caCerts.assign(caCerts.begin(), caCerts.end());
         impl_->serverName = serverName;
+        impl_->mode = Impl::Mode::Client;
+    }
+
+    void TlsDecorator::ConfigureAsServer(
+        std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer,
+        const std::string& cert,
+        const std::string& key,
+        const std::string& password
+    ) {
+        if (impl_->worker.joinable()) {
+            return;
+        }
+        impl_->lowerLayer = lowerLayer;
+        impl_->cert.assign(cert.begin(), cert.end());
+        impl_->key.assign(key.begin(), key.end());
+        impl_->password = password;
+        impl_->mode = Impl::Mode::Server;
     }
 
     SystemAbstractions::DiagnosticsSender::UnsubscribeDelegate TlsDecorator::SubscribeToDiagnostics(
@@ -349,6 +410,20 @@ namespace TlsDecorator {
         MessageReceivedDelegate messageReceivedDelegate,
         BrokenDelegate brokenDelegate
     ) {
+        if (impl_->worker.joinable()) {
+            impl_->diagnosticsSender.SendDiagnosticInformationString(
+                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                "Process called while already processing"
+            );
+            return false;
+        }
+        if (impl_->mode == Impl::Mode::None) {
+            impl_->diagnosticsSender.SendDiagnosticInformationString(
+                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                "Process called without first configuring"
+            );
+            return false;
+        }
         impl_->messageReceivedDelegate = messageReceivedDelegate;
         impl_->brokenDelegate = brokenDelegate;
         impl_->tlsConfig = decltype(impl_->tlsConfig)(
@@ -357,19 +432,88 @@ namespace TlsDecorator {
                 selectedTlsShim->tls_config_free(p);
             }
         );
-        impl_->tlsImpl = decltype(impl_->tlsImpl)(
-            selectedTlsShim->tls_client(),
-            [](tls* p) {
-                selectedTlsShim->tls_close(p);
-                selectedTlsShim->tls_free(p);
+        const auto tlsImplDeleter = [](tls* p) {
+            selectedTlsShim->tls_close(p);
+            selectedTlsShim->tls_free(p);
+        };
+        if (impl_->mode == Impl::Mode::Client) {
+            impl_->tlsImpl = decltype(impl_->tlsImpl)(
+                selectedTlsShim->tls_client(),
+                tlsImplDeleter
+            );
+            (void)selectedTlsShim->tls_config_set_ca_mem(
+                impl_->tlsConfig.get(),
+                impl_->caCerts.data(),
+                impl_->caCerts.size()
+            );
+        } else {
+            impl_->tlsImpl = decltype(impl_->tlsImpl)(
+                selectedTlsShim->tls_server(),
+                tlsImplDeleter
+            );
+            (void)selectedTlsShim->tls_config_set_cert_mem(
+                impl_->tlsConfig.get(),
+                impl_->cert.data(),
+                impl_->cert.size()
+            );
+            std::unique_ptr< BIO, std::function< void(BIO*) > > encryptedKeyInput(
+                selectedTlsShim->BIO_new_mem_buf(
+                    impl_->key.data(),
+                    (int)impl_->key.size()
+                ),
+                [](BIO* p){ selectedTlsShim->BIO_free_all(p); }
+            );
+            std::unique_ptr< EVP_PKEY, std::function< void(EVP_PKEY*) > > key(
+                selectedTlsShim->PEM_read_bio_PrivateKey(
+                    encryptedKeyInput.get(),
+                    NULL,
+                    NULL,
+                    (void*)impl_->password.c_str()
+                ),
+                [](EVP_PKEY* p){ selectedTlsShim->EVP_PKEY_free(p); }
+            );
+            if (key == NULL) {
+                impl_->diagnosticsSender.SendDiagnosticInformationString(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "error reading private key"
+                );
+                return false;
             }
-        );
-
-        selectedTlsShim->tls_config_set_ca_mem(
-            impl_->tlsConfig.get(),
-            impl_->caCerts.data(),
-            impl_->caCerts.size()
-        );
+            std::unique_ptr< BIO, std::function< void(BIO*) > > decryptedKeyOutput(
+                selectedTlsShim->BIO_new(BIO_s_mem()),
+                [](BIO* p){ selectedTlsShim->BIO_free_all(p); }
+            );
+            if (
+                !selectedTlsShim->PEM_write_bio_PrivateKey(
+                    decryptedKeyOutput.get(),
+                    key.get(),
+                    NULL, NULL, 0, NULL, NULL
+                )
+            ) {
+                impl_->diagnosticsSender.SendDiagnosticInformationString(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "error decrypting private key"
+                );
+                return false;
+            }
+            char* decryptedKeyContents;
+            const auto decryptedKeySize = selectedTlsShim->BIO_get_mem_data(
+                decryptedKeyOutput.get(),
+                &decryptedKeyContents
+            );
+            if (decryptedKeySize < 0) {
+                impl_->diagnosticsSender.SendDiagnosticInformationString(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "error extracting decrypted private key"
+                );
+                return false;
+            }
+            (void)selectedTlsShim->tls_config_set_key_mem(
+                impl_->tlsConfig.get(),
+                (const uint8_t*)decryptedKeyContents,
+                decryptedKeySize
+            );
+        }
 
         selectedTlsShim->tls_config_set_protocols(impl_->tlsConfig.get(), TLS_PROTOCOLS_DEFAULT);
 

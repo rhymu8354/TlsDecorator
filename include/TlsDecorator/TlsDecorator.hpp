@@ -60,6 +60,30 @@ namespace TlsDecorator {
             const std::string& serverName
         );
 
+        /**
+         * This method sets up the decorator to insert a TLS layer
+         * and configure it for server mode (receiving a connection
+         * from a client).
+         *
+         * @param[in] lowerLayer
+         *     This is the lower-level connection to decorate.
+         *
+         * @param[in] cert
+         *     This is the server's certificate, in PEM format.
+         *
+         * @param[in] key
+         *     This is the server's private key, in PEM format.
+         *
+         * @param[in] password
+         *     This is the password for the server's private key.
+         */
+        void ConfigureAsServer(
+            std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer,
+            const std::string& cert,
+            const std::string& key,
+            const std::string& password
+        );
+
         // SystemAbstractions::INetworkConnection
     public:
         virtual SystemAbstractions::DiagnosticsSender::UnsubscribeDelegate SubscribeToDiagnostics(

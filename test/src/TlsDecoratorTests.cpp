@@ -29,11 +29,17 @@ namespace {
     {
         // Properties
 
+        bool tlsServerMode = false;
         bool tlsConnectCalled = false;
         bool tlsConfigProtocolSetCalled = false;
         uint32_t tlsConfigProtocolSetProtocols = 0;
         bool tlsConfigureCalled = false;
         std::string caCerts;
+        std::string configuredCert;
+        std::string configuredKey;
+        std::string encryptedKey;
+        std::string keyPassword;
+        std::string decryptedKey;
         bool tlsReadCalled = false;
         bool tlsWriteCalled = false;
         bool stallTlsWrite = false;
@@ -83,6 +89,41 @@ namespace {
 
         // TlsDecorator::TlsShim
 
+        virtual BIO *BIO_new(const BIO_METHOD *type) override {
+            return nullptr;
+        }
+
+        virtual BIO *BIO_new_mem_buf(const void *buf, int len) override {
+            encryptedKey = std::string(
+                (const char*)buf,
+                len
+            );
+            return nullptr;
+        }
+
+        virtual long BIO_ctrl(BIO *bp, int cmd, long larg, void *parg) override {
+            *((const char**)parg) = decryptedKey.c_str();
+            return (long)decryptedKey.size();
+        }
+
+        virtual void BIO_free_all(BIO *a) override {
+        }
+
+        virtual EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb, void *u) override {
+            static EVP_PKEY dummy;
+            keyPassword = (const char*)u;
+            return &dummy;
+        }
+
+        virtual int PEM_write_bio_PrivateKey(BIO *bp, EVP_PKEY *x, const EVP_CIPHER *enc,
+            unsigned char *kstr, int klen, pem_password_cb *cb, void *u) override
+        {
+            return 1;
+        }
+
+        virtual void EVP_PKEY_free(EVP_PKEY *pkey) override {
+        }
+
         virtual const char *tls_error(struct tls *_ctx) override {
             return nullptr;
         }
@@ -113,6 +154,26 @@ namespace {
             return 0;
         }
 
+        virtual int tls_config_set_cert_mem(struct tls_config *_config, const uint8_t *_cert,
+            size_t _len) override
+        {
+            configuredCert = std::string(
+                (const char*)_cert,
+                _len
+            );
+            return 0;
+        }
+
+        virtual int tls_config_set_key_mem(struct tls_config *_config, const uint8_t *_key,
+            size_t _len) override
+        {
+            configuredKey = std::string(
+                (const char*)_key,
+                _len
+            );
+            return 0;
+        }
+
         virtual int tls_configure(struct tls *_ctx, struct tls_config *_config) override {
             tlsConfigureCalled = true;
             return 0;
@@ -122,6 +183,12 @@ namespace {
         }
 
         virtual struct tls *tls_client(void) override {
+            tlsServerMode = false;
+            return nullptr;
+        }
+
+        virtual struct tls *tls_server(void) override {
+            tlsServerMode = true;
             return nullptr;
         }
 
@@ -479,6 +546,7 @@ TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessing) {
     EXPECT_EQ(TLS_PROTOCOLS_DEFAULT, mockTls.tlsConfigProtocolSetProtocols);
     EXPECT_TRUE(mockTls.tlsConfigureCalled);
     EXPECT_TRUE(mockTls.tlsConnectCalled);
+    EXPECT_FALSE(mockTls.tlsServerMode);
     EXPECT_TRUE(mockConnection.processCalled);
 }
 
@@ -775,5 +843,109 @@ TEST_F(TlsDecoratorTests, ConfigureCACertificates) {
     EXPECT_EQ(
         "Pretend there are certificates here, ok?",
         mockTls.caCerts
+    );
+}
+
+TEST_F(TlsDecoratorTests, StartTlsServerMode) {
+    // Configure decorator as a server.
+    mockTls.decryptedKey = "Pretend this is a decrypted private key, ok?";
+    decorator.ConfigureAsServer(
+        std::shared_ptr< MockConnection >(
+            &mockConnection,
+            [](MockConnection*){}
+        ),
+        "Pretend this is a certificate, ok?",
+        "Pretend this is an encrypted private key, ok?",
+        "ExcellentPassword"
+    );
+    EXPECT_FALSE(mockTls.tlsConnectCalled);
+    (void)decorator.Process(
+        [](const std::vector< uint8_t >& message){},
+        [](bool graceful){}
+    );
+    EXPECT_TRUE(mockTls.tlsConfigureCalled);
+    EXPECT_TRUE(mockTls.tlsConnectCalled);
+    EXPECT_TRUE(mockTls.tlsServerMode);
+    EXPECT_TRUE(mockConnection.processCalled);
+
+    // Verify the certificate and key were configured.
+    EXPECT_EQ(
+        "Pretend this is a certificate, ok?",
+        mockTls.configuredCert
+    );
+    EXPECT_EQ(
+        "Pretend this is a decrypted private key, ok?",
+        mockTls.configuredKey
+    );
+    EXPECT_EQ(
+        "Pretend this is an encrypted private key, ok?",
+        mockTls.encryptedKey
+    );
+    EXPECT_EQ(
+        "ExcellentPassword",
+        mockTls.keyPassword
+    );
+}
+
+TEST_F(TlsDecoratorTests, ProcessWithoutConfigure) {
+    EXPECT_FALSE(
+        decorator.Process(
+            [](const std::vector< uint8_t >& message){},
+            [](bool graceful){}
+        )
+    );
+    EXPECT_EQ(
+        (std::vector< std::string >{
+            "TlsDecorator[10]: Process called without first configuring",
+        }),
+        diagnosticMessages
+    );
+}
+
+TEST_F(TlsDecoratorTests, ProcessWhenAlreadyProcessing) {
+    std::vector< std::string > capturedDiagnosticMessages;
+    decorator.SubscribeToDiagnostics(
+        [&capturedDiagnosticMessages](
+            std::string senderName,
+            size_t level,
+            std::string message
+        ){
+            capturedDiagnosticMessages.push_back(
+                SystemAbstractions::sprintf(
+                    "%s[%zu]: %s",
+                    senderName.c_str(),
+                    level,
+                    message.c_str()
+                )
+            );
+        },
+        10
+    );
+    mockTls.decryptedKey = "Pretend this is a decrypted private key, ok?";
+    decorator.ConfigureAsServer(
+        std::shared_ptr< MockConnection >(
+            &mockConnection,
+            [](MockConnection*){}
+        ),
+        "Pretend this is a certificate, ok?",
+        "Pretend this is an encrypted private key, ok?",
+        "ExcellentPassword"
+    );
+    EXPECT_FALSE(mockTls.tlsConnectCalled);
+    (void)decorator.Process(
+        [](const std::vector< uint8_t >& message){},
+        [](bool graceful){}
+    );
+    EXPECT_FALSE(
+        decorator.Process(
+            [](const std::vector< uint8_t >& message){},
+            [](bool graceful){}
+        )
+    );
+    EXPECT_EQ(
+        (std::vector< std::string >{
+            "TlsDecorator[10]: Process called while already processing",
+        }),
+        capturedDiagnosticMessages
     );
 }
