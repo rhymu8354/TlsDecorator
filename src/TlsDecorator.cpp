@@ -143,12 +143,6 @@ namespace TlsDecorator {
         std::vector< uint8_t > receiveBufferSecure;
 
         /**
-         * This holds data received from the TLS layer, to be delivered
-         * to the data received delegate.
-         */
-        std::vector< uint8_t > receiveBufferDecrypted;
-
-        /**
          * This flag keeps track of whether or not the lower-level client
          * connection is still open.
          */
@@ -233,6 +227,7 @@ namespace TlsDecorator {
         void Worker() {
             std::unique_lock< decltype(mutex) > lock(mutex);
             bool tryRead = true;
+            std::vector< uint8_t > buffer;
             while (!stopWorker) {
                 if (
                     !sendBuffer.empty()
@@ -242,11 +237,14 @@ namespace TlsDecorator {
                     diagnosticsSender.SendDiagnosticInformationFormatted(
                         0, "tls_write(%zu)", sendBuffer.size()
                     );
+                    buffer.assign(sendBuffer.begin(), sendBuffer.end());
+                    lock.unlock();
                     const auto amount = selectedTlsShim->tls_write(
                         tlsImpl.get(),
-                        sendBuffer.data(),
-                        sendBuffer.size()
+                        buffer.data(),
+                        buffer.size()
                     );
+                    lock.lock();
                     if (amount == TLS_WANT_POLLIN) {
                         // Can't write any more until we read some more...
                         diagnosticsSender.SendDiagnosticInformationFormatted(
@@ -261,7 +259,9 @@ namespace TlsDecorator {
                             sendBuffer.size(),
                             tlsErrorMessage
                         );
+                        lock.unlock();
                         lowerLayer->Close(false);
+                        lock.lock();
                         break;
                     } else {
                         diagnosticsSender.SendDiagnosticInformationFormatted(
@@ -285,15 +285,17 @@ namespace TlsDecorator {
                     || tryRead
                 ) {
                     tryRead = true;
-                    receiveBufferDecrypted.resize(DECRYPTED_BUFFER_SIZE);
+                    buffer.resize(DECRYPTED_BUFFER_SIZE);
                     diagnosticsSender.SendDiagnosticInformationString(
                         0, "tls_read"
                     );
+                    lock.unlock();
                     const auto amount = selectedTlsShim->tls_read(
                         tlsImpl.get(),
-                        receiveBufferDecrypted.data(),
-                        receiveBufferDecrypted.size()
+                        buffer.data(),
+                        buffer.size()
                     );
+                    lock.lock();
                     if (amount == TLS_WANT_POLLIN) {
                         // Can't read any more because we're out of data.
                         diagnosticsSender.SendDiagnosticInformationString(
@@ -306,16 +308,18 @@ namespace TlsDecorator {
                             "tls_read -> error: %s",
                             tlsErrorMessage
                         );
+                        lock.unlock();
                         lowerLayer->Close(false);
+                        lock.lock();
                         break;
                     } else if (amount > 0) {
                         diagnosticsSender.SendDiagnosticInformationFormatted(
                             0, "tls_read -> %zu", (size_t)amount
                         );
-                        receiveBufferDecrypted.resize((size_t)amount);
+                        buffer.resize((size_t)amount);
                         if (messageReceivedDelegate != nullptr) {
                             lock.unlock();
-                            messageReceivedDelegate(receiveBufferDecrypted);
+                            messageReceivedDelegate(buffer);
                             lock.lock();
                         }
                         if (
@@ -323,7 +327,9 @@ namespace TlsDecorator {
                             && !open
                         ) {
                             if (brokenDelegate != nullptr) {
+                                lock.unlock();
                                 brokenDelegate(false);
+                                lock.lock();
                             }
                         }
                     } else {
@@ -348,6 +354,7 @@ namespace TlsDecorator {
                 diagnosticsSender.SendDiagnosticInformationString(
                     0, "Closed gracefully"
                 );
+                lock.unlock();
                 if (lowerLayer != nullptr) {
                     lowerLayer->Close(true);
                 }
@@ -362,7 +369,6 @@ namespace TlsDecorator {
     TlsDecorator::TlsDecorator()
         : impl_(new Impl())
     {
-        impl_->receiveBufferDecrypted.reserve(DECRYPTED_BUFFER_SIZE);
     }
 
     void TlsDecorator::ConfigureAsClient(
@@ -518,6 +524,12 @@ namespace TlsDecorator {
         selectedTlsShim->tls_config_set_protocols(impl_->tlsConfig.get(), TLS_PROTOCOLS_DEFAULT);
 
         if (selectedTlsShim->tls_configure(impl_->tlsImpl.get(), impl_->tlsConfig.get()) != 0) {
+            const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsImpl.get());
+            impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                "tls_configure -> error: %s",
+                tlsErrorMessage
+            );
             return false;
         }
         if (
@@ -553,12 +565,13 @@ namespace TlsDecorator {
                 },
                 [](struct tls *_ctx, const void *_buf, size_t _buflen, void *_cb_arg){
                     const auto self = (TlsDecorator*)_cb_arg;
-                    std::lock_guard< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
+                    std::unique_lock< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
                     self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
                         0, "_write_cb(%zu)", _buflen
                     );
                     if (self->impl_->open) {
                         const auto bufBytes = (const uint8_t*)_buf;
+                        lock.unlock();
                         self->impl_->lowerLayer->SendMessage(
                             std::vector< uint8_t >(bufBytes, bufBytes + _buflen)
                         );
