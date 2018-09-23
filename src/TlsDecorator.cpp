@@ -61,6 +61,12 @@ namespace TlsDecorator {
         SystemAbstractions::DiagnosticsSender diagnosticsSender;
 
         /**
+         * This is an optional function to call when the initial TLS
+         * handshake is complete.
+         */
+        HandshakeCompleteDelegate handshakeCompleteDelegate;
+
+        /**
          * This is the lower-level client connection to decorate.
          */
         std::shared_ptr< SystemAbstractions::INetworkConnection > lowerLayer;
@@ -146,6 +152,12 @@ namespace TlsDecorator {
          * before it's read by the TLS layer.
          */
         std::vector< uint8_t > receiveBufferSecure;
+
+        /**
+         * This flag keeps track of whether or not the TLS handshake
+         * has been completed.
+         */
+        bool handshakeComplete = false;
 
         /**
          * This flag keeps track of whether or not the lower-level client
@@ -247,8 +259,42 @@ namespace TlsDecorator {
             bool tryRead = true;
             std::vector< uint8_t > buffer;
             while (!stopWorker) {
+                if (!handshakeComplete) {
+                    diagnosticsSender.SendDiagnosticInformationString(
+                        0, "tls_handshake"
+                    );
+                    const auto handshakeResult = selectedTlsShim->tls_handshake(tlsConnectionImpl.get());
+                    if (handshakeResult == 0) {
+                        diagnosticsSender.SendDiagnosticInformationString(
+                            0, "tls_handshake -> complete"
+                        );
+                        handshakeComplete = true;
+                        if (handshakeCompleteDelegate != nullptr) {
+                            if (selectedTlsShim->tls_peer_cert_provided(tlsConnectionImpl.get())) {
+                                size_t len;
+                                const auto cert = (const char*)selectedTlsShim->tls_peer_cert_chain_pem(tlsConnectionImpl.get(), &len);
+                                handshakeCompleteDelegate(std::string(cert, len));
+                            } else {
+                                handshakeCompleteDelegate("");
+                            }
+                        }
+                    } else if (handshakeResult == TLS_WANT_POLLIN) {
+                        diagnosticsSender.SendDiagnosticInformationString(
+                            0, "tls_handshake -> TLS_WANT_POLLIN"
+                        );
+                    } else {
+                        const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsConnectionImpl.get());
+                        diagnosticsSender.SendDiagnosticInformationFormatted(
+                            SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                            "tls_handshake -> error: %s",
+                            tlsErrorMessage
+                        );
+                        break;
+                    }
+                }
                 if (
-                    !sendBuffer.empty()
+                    handshakeComplete
+                    && !sendBuffer.empty()
                     && canWrite
                     && open
                 ) {
@@ -301,8 +347,11 @@ namespace TlsDecorator {
                     }
                 }
                 if (
-                    !receiveBufferSecure.empty()
-                    || tryRead
+                    handshakeComplete
+                    && (
+                        !receiveBufferSecure.empty()
+                        || tryRead
+                    )
                 ) {
                     tryRead = true;
                     buffer.resize(DECRYPTED_BUFFER_SIZE);
@@ -359,7 +408,8 @@ namespace TlsDecorator {
                             stopWorker
                             || !receiveBufferSecure.empty()
                             || (
-                                !sendBuffer.empty()
+                                handshakeComplete
+                                && !sendBuffer.empty()
                                 && canWrite
                             )
                         );
@@ -398,6 +448,10 @@ namespace TlsDecorator {
     TlsDecorator::TlsDecorator()
         : impl_(new Impl())
     {
+    }
+
+    void TlsDecorator::SetHandshakeCompleteDelegate(HandshakeCompleteDelegate handshakeCompleteDelegate) {
+        impl_->handshakeCompleteDelegate = handshakeCompleteDelegate;
     }
 
     void TlsDecorator::ConfigureAsClient(

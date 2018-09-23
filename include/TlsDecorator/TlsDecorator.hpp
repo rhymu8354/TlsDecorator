@@ -9,6 +9,7 @@
  * © 2018 by Richard Walters
  */
 
+#include <functional>
 #include <memory>
 #include <stdint.h>
 #include <string>
@@ -24,6 +25,20 @@ namespace TlsDecorator {
     class TlsDecorator
         : public SystemAbstractions::INetworkConnection
     {
+        // Types
+    public:
+        /**
+         * This is the type of function used to publish information
+         * when the TLS handshake for the connection is complete.
+         *
+         * @param[in] certificate
+         *     This is the PEM-encoded certificate, if any, provided by
+         *     the connection peer.
+         */
+        typedef std::function<
+            void(const std::string& certificate)
+        > HandshakeCompleteDelegate;
+
         // Lifecycle management
     public:
         ~TlsDecorator() noexcept;
@@ -38,6 +53,16 @@ namespace TlsDecorator {
          * This is the default constructor.
          */
         TlsDecorator();
+
+        /**
+         * This method sets up a function to be called when the TLS
+         * handshake is complete.
+         *
+         * @param[in] handshakeCompleteDelegate
+         *     This is the function to call when the TLS handshake
+         *     is complete.
+         */
+        void SetHandshakeCompleteDelegate(HandshakeCompleteDelegate handshakeCompleteDelegate);
 
         /**
          * This method sets up the decorator to insert a TLS layer

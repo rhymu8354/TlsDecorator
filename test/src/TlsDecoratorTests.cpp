@@ -35,6 +35,7 @@ namespace {
         bool tlsConfigProtocolSetCalled = false;
         uint32_t tlsConfigProtocolSetProtocols = 0;
         bool tlsConfigureCalled = false;
+        std::string peerCert;
         std::string caCerts;
         std::string configuredCert;
         std::string configuredKey;
@@ -211,6 +212,19 @@ namespace {
             tlsWriteCb = _write_cb;
             tlsCbArg = _cb_arg;
             return 0;
+        }
+
+        virtual int tls_handshake(struct tls *_ctx) override {
+            return 0;
+        }
+
+        virtual int tls_peer_cert_provided(struct tls *_ctx) override {
+            return 1;
+        }
+
+        virtual const uint8_t *tls_peer_cert_chain_pem(struct tls *_ctx, size_t *_len) override {
+            *_len = peerCert.length();
+            return (const uint8_t*)peerCert.data();
         }
 
         virtual ssize_t tls_read(struct tls *_ctx, void *_buf, size_t _buflen) override {
@@ -492,6 +506,8 @@ TEST_F(TlsDecoratorTests, DiagnosticsSubscription) {
     );
     EXPECT_EQ(
         (std::vector< std::string >{
+            "TlsDecorator[0]: tls_handshake",
+            "TlsDecorator[0]: tls_handshake -> complete",
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> TLS_WANT_POLLIN",
             "TlsDecorator[0]: tls_read -> TLS_WANT_POLLIN",
@@ -676,6 +692,8 @@ TEST_F(TlsDecoratorTests, SendMessageQueuesDataWithTlsWrite) {
     EXPECT_EQ(
         (std::vector< std::string >{
             "TlsDecorator[0]: send(8)",
+            "TlsDecorator[0]: tls_handshake",
+            "TlsDecorator[0]: tls_handshake -> complete",
             "TlsDecorator[0]: tls_write(8)",
             "TlsDecorator[0]: _write_cb(13) while open",
             "TlsDecorator[0]: tls_write(8) -> 8",
@@ -751,6 +769,8 @@ TEST_F(TlsDecoratorTests, SecureDataReceivedResultsInDecryptedDataDelivered) {
     );
     EXPECT_EQ(
         (std::vector< std::string >{
+            "TlsDecorator[0]: tls_handshake",
+            "TlsDecorator[0]: tls_handshake -> complete",
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> TLS_WANT_POLLIN",
             "TlsDecorator[0]: tls_read -> TLS_WANT_POLLIN",
@@ -811,6 +831,8 @@ TEST_F(TlsDecoratorTests, RemoteConnectionBreakForwardedWhenNoSecureDataBuffered
     }
     EXPECT_EQ(
         (std::vector< std::string >{
+            "TlsDecorator[0]: tls_handshake",
+            "TlsDecorator[0]: tls_handshake -> complete",
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> TLS_WANT_POLLIN",
             "TlsDecorator[0]: tls_read -> TLS_WANT_POLLIN",
@@ -1015,4 +1037,45 @@ TEST_F(TlsDecoratorTests, ProcessWhenAlreadyProcessing) {
         }),
         capturedDiagnosticMessages
     );
+}
+
+TEST_F(TlsDecoratorTests, HandshakeCompleteDelegate) {
+    mockTls.peerCert = "Pretend this is the server certificate, ok?";
+    decorator.ConfigureAsClient(
+        std::shared_ptr< MockConnection >(
+            &mockConnection,
+            [](MockConnection*){}
+        ),
+        "Pretend there are certificates here, ok?",
+        "Pepe"
+    );
+    (void)decorator.Connect(42, 99);
+    std::string peerCert;
+    std::condition_variable wakeCondition;
+    std::mutex mutex;
+    const TlsDecorator::TlsDecorator::HandshakeCompleteDelegate handshakeCompleteDelegate = [
+        &peerCert,
+        &wakeCondition,
+        &mutex
+    ](const std::string& certificate){
+        std::lock_guard< std::mutex > lock(mutex);
+        peerCert = certificate;
+        wakeCondition.notify_all();
+    };
+    decorator.SetHandshakeCompleteDelegate(handshakeCompleteDelegate);
+    (void)decorator.Process(
+        [](const std::vector< uint8_t >& message){},
+        [](bool graceful){}
+    );
+    {
+        std::unique_lock< decltype(mutex) > lock(mutex);
+        EXPECT_TRUE(
+            wakeCondition.wait_for(
+                lock,
+                std::chrono::milliseconds(100),
+                [&peerCert]{ return !peerCert.empty(); }
+            )
+        );
+    }
+    EXPECT_EQ(mockTls.peerCert, peerCert);
 }

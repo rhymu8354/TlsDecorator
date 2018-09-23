@@ -118,6 +118,18 @@ namespace TlsDecorator {
         return ::tls_accept_cbs(_ctx, _cctx, _read_cb, _write_cb, _cb_arg);
     }
 
+    int TlsShim::tls_handshake(struct tls *_ctx) {
+        return ::tls_handshake(_ctx);
+    }
+
+    int TlsShim::tls_peer_cert_provided(struct tls *_ctx) {
+        return ::tls_peer_cert_provided(_ctx);
+    }
+
+    const uint8_t *TlsShim::tls_peer_cert_chain_pem(struct tls *_ctx, size_t *_len) {
+        return ::tls_peer_cert_chain_pem(_ctx, _len);
+    }
+
     ssize_t TlsShim::tls_read(struct tls *_ctx, void *_buf, size_t _buflen) {
         return ::tls_read(_ctx, _buf, _buflen);
     }

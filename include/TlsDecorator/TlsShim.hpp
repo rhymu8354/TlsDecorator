@@ -59,6 +59,9 @@ namespace TlsDecorator {
             tls_write_cb _write_cb, void *_cb_arg, const char *_servername);
         virtual int tls_accept_cbs(struct tls *_ctx, struct tls **_cctx,
             tls_read_cb _read_cb, tls_write_cb _write_cb, void *_cb_arg);
+        virtual int tls_handshake(struct tls *_ctx);
+        virtual int tls_peer_cert_provided(struct tls *_ctx);
+        virtual const uint8_t *tls_peer_cert_chain_pem(struct tls *_ctx, size_t *_len);
         virtual ssize_t tls_read(struct tls *_ctx, void *_buf, size_t _buflen);
         virtual ssize_t tls_write(struct tls *_ctx, const void *_buf, size_t _buflen);
         virtual int tls_close(struct tls *_ctx);
