@@ -483,12 +483,19 @@ TEST_F(TlsDecoratorTests, DiagnosticsSubscription) {
     );
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     decorator.Close();
+    EXPECT_TRUE(
+        mockConnection.Await(
+            [this]{
+                return mockConnection.closeCalled;
+            }
+        )
+    );
     EXPECT_EQ(
         (std::vector< std::string >{
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> TLS_WANT_POLLIN",
             "TlsDecorator[0]: tls_read -> TLS_WANT_POLLIN",
-            "TlsDecorator[0]: Closed gracefully"
+            "TlsDecorator[0]: Closed abruptly"
         }),
         capturedDiagnosticMessages
     );
@@ -513,7 +520,28 @@ TEST_F(TlsDecoratorTests, DiagnosticsUnsubscription) {
         }
     );
     unsubscribe();
+    decorator.ConfigureAsClient(
+        std::shared_ptr< MockConnection >(
+            &mockConnection,
+            [](MockConnection*){}
+        ),
+        "Pretend there are certificates here, ok?",
+        "Pepe"
+    );
+    (void)decorator.Connect(42, 99);
+    (void)decorator.Process(
+        [](const std::vector< uint8_t >& message){},
+        [](bool graceful){}
+    );
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     decorator.Close();
+    EXPECT_TRUE(
+        mockConnection.Await(
+            [this]{
+                return mockConnection.closeCalled;
+            }
+        )
+    );
     EXPECT_EQ(
         (std::vector< std::string >{
         }),
@@ -637,17 +665,24 @@ TEST_F(TlsDecoratorTests, SendMessageQueuesDataWithTlsWrite) {
         )
     );
     decorator.Close(false);
+    EXPECT_TRUE(
+        mockConnection.Await(
+            [this]{
+                return mockConnection.closeCalled;
+            }
+        )
+    );
     EXPECT_EQ(decrpytedDataAsVector, mockTls.tlsWriteDecryptedBuf);
     EXPECT_EQ(
         (std::vector< std::string >{
             "TlsDecorator[0]: send(8)",
             "TlsDecorator[0]: tls_write(8)",
-            "TlsDecorator[0]: _write_cb(13)",
+            "TlsDecorator[0]: _write_cb(13) while open",
             "TlsDecorator[0]: tls_write(8) -> 8",
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> TLS_WANT_POLLIN",
             "TlsDecorator[0]: tls_read -> TLS_WANT_POLLIN",
-            "TlsDecorator[0]: Closed gracefully",
+            "TlsDecorator[0]: Closed abruptly",
         }),
         diagnosticMessages
     );
@@ -707,6 +742,13 @@ TEST_F(TlsDecoratorTests, SecureDataReceivedResultsInDecryptedDataDelivered) {
     EXPECT_EQ(encryptedDataAsVector, mockTls.tlsReadEncryptedBuf);
     EXPECT_EQ(decrpytedDataAsVector, actualDecryptedData);
     decorator.Close(false);
+    EXPECT_TRUE(
+        mockConnection.Await(
+            [this]{
+                return mockConnection.closeCalled;
+            }
+        )
+    );
     EXPECT_EQ(
         (std::vector< std::string >{
             "TlsDecorator[0]: tls_read",
@@ -716,7 +758,7 @@ TEST_F(TlsDecoratorTests, SecureDataReceivedResultsInDecryptedDataDelivered) {
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> 13 (of 13)",
             "TlsDecorator[0]: tls_read -> 8",
-            "TlsDecorator[0]: Closed gracefully",
+            "TlsDecorator[0]: Closed abruptly",
         }),
         diagnosticMessages
     );
@@ -772,9 +814,17 @@ TEST_F(TlsDecoratorTests, RemoteConnectionBreakForwardedWhenNoSecureDataBuffered
             "TlsDecorator[0]: tls_read",
             "TlsDecorator[0]: _read_cb(65536) -> TLS_WANT_POLLIN",
             "TlsDecorator[0]: tls_read -> TLS_WANT_POLLIN",
-            "TlsDecorator[0]: Remote closed",
+            "TlsDecorator[0]: Remote closed, no more data received left to process",
         }),
         diagnosticMessages
+    );
+    decorator.Close(false);
+    EXPECT_TRUE(
+        mockConnection.Await(
+            [this]{
+                return mockConnection.closeCalled;
+            }
+        )
     );
 }
 
@@ -804,7 +854,13 @@ TEST_F(TlsDecoratorTests, CleanCloseProcessesAllQueuedTlsWritesBeforeActuallyClo
     const std::vector< uint8_t > messageAsVector(messageAsString.begin(), messageAsString.end());
     decorator.SendMessage(messageAsVector);
     decorator.Close(true);
-    EXPECT_FALSE(mockConnection.closeCalled);
+    EXPECT_FALSE(
+        mockConnection.Await(
+            [this]{
+                return mockConnection.closeCalled;
+            }
+        )
+    );
 
     // Lift the stalling of TLS write.
     {
@@ -875,7 +931,7 @@ TEST_F(TlsDecoratorTests, StartTlsServerMode) {
         [](bool graceful){}
     );
     EXPECT_TRUE(mockTls.tlsConfigureCalled);
-    EXPECT_TRUE(mockTls.tlsConnectCalled);
+    EXPECT_TRUE(mockTls.tlsAcceptCalled);
     EXPECT_TRUE(mockTls.tlsServerMode);
     EXPECT_TRUE(mockConnection.processCalled);
 

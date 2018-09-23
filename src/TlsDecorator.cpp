@@ -84,9 +84,14 @@ namespace TlsDecorator {
         BrokenDelegate brokenDelegate;
 
         /**
-         * This implements the TLS layer.
+         * This implements the TLS layer server context.
          */
-        std::unique_ptr< tls, std::function< void(tls*) > > tlsImpl;
+        std::unique_ptr< tls, std::function< void(tls*) > > tlsServerImpl;
+
+        /**
+         * This implements the TLS layer connection context.
+         */
+        std::unique_ptr< tls, std::function< void(tls*) > > tlsConnectionImpl;
 
         /**
          * This is used to configure the TLS layer.
@@ -149,6 +154,12 @@ namespace TlsDecorator {
         bool open = true;
 
         /**
+         * This flag keeps track of whether or not the upper-level user
+         * has been notified of the connection having been broken.
+         */
+        bool brokenPublished = false;
+
+        /**
          * This flag indicates whether or not we should attempt to write
          * data to the TLS layer.  It's cleared if tls_write returns
          * TLS_WANT_POLLIN, and set again when the read callback is able
@@ -206,17 +217,24 @@ namespace TlsDecorator {
          */
         void ConnectionBroken() {
             std::unique_lock< decltype(mutex) > lock(mutex);
-            diagnosticsSender.SendDiagnosticInformationString(
-                0, "Remote closed"
-            );
+            if (!open) {
+                return;
+            }
             open = false;
             wakeCondition.notify_all();
-            if (
-                receiveBufferSecure.empty()
-                && (brokenDelegate != nullptr)
-            ) {
-                lock.unlock();
-                brokenDelegate(false);
+            if (receiveBufferSecure.empty()) {
+                diagnosticsSender.SendDiagnosticInformationString(
+                    0, "Remote closed, no more data received left to process"
+                );
+                brokenPublished = true;
+                if (brokenDelegate != nullptr) {
+                    lock.unlock();
+                    brokenDelegate(false);
+                }
+            } else {
+                diagnosticsSender.SendDiagnosticInformationString(
+                    0, "Remote closed, received data left to be processed"
+                );
             }
         }
 
@@ -240,7 +258,7 @@ namespace TlsDecorator {
                     buffer.assign(sendBuffer.begin(), sendBuffer.end());
                     lock.unlock();
                     const auto amount = selectedTlsShim->tls_write(
-                        tlsImpl.get(),
+                        tlsConnectionImpl.get(),
                         buffer.data(),
                         buffer.size()
                     );
@@ -252,16 +270,13 @@ namespace TlsDecorator {
                         );
                         canWrite = false;
                     } else if (amount < 0) {
-                        const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsImpl.get());
+                        const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsConnectionImpl.get());
                         diagnosticsSender.SendDiagnosticInformationFormatted(
                             SystemAbstractions::DiagnosticsSender::Levels::ERROR,
                             "tls_write(%zu) -> error: %s",
                             sendBuffer.size(),
                             tlsErrorMessage
                         );
-                        lock.unlock();
-                        lowerLayer->Close(false);
-                        lock.lock();
                         break;
                     } else {
                         diagnosticsSender.SendDiagnosticInformationFormatted(
@@ -270,7 +285,12 @@ namespace TlsDecorator {
                         if ((size_t)amount == sendBuffer.size()) {
                             sendBuffer.clear();
                             if (upperLayerClosed) {
-                                break;
+                                diagnosticsSender.SendDiagnosticInformationString(
+                                    0, "Last data to write is written; closing lower layer gracefully"
+                                );
+                                lock.unlock();
+                                lowerLayer->Close(true);
+                                lock.lock();
                             }
                         } else {
                             sendBuffer.erase(
@@ -291,7 +311,7 @@ namespace TlsDecorator {
                     );
                     lock.unlock();
                     const auto amount = selectedTlsShim->tls_read(
-                        tlsImpl.get(),
+                        tlsConnectionImpl.get(),
                         buffer.data(),
                         buffer.size()
                     );
@@ -302,15 +322,12 @@ namespace TlsDecorator {
                             0, "tls_read -> TLS_WANT_POLLIN"
                         );
                     } else if (amount < 0) {
-                        const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsImpl.get());
+                        const auto tlsErrorMessage = selectedTlsShim->tls_error(tlsConnectionImpl.get());
                         diagnosticsSender.SendDiagnosticInformationFormatted(
                             SystemAbstractions::DiagnosticsSender::Levels::ERROR,
                             "tls_read -> error: %s",
                             tlsErrorMessage
                         );
-                        lock.unlock();
-                        lowerLayer->Close(false);
-                        lock.lock();
                         break;
                     } else if (amount > 0) {
                         diagnosticsSender.SendDiagnosticInformationFormatted(
@@ -322,19 +339,18 @@ namespace TlsDecorator {
                             messageReceivedDelegate(buffer);
                             lock.lock();
                         }
-                        if (
-                            receiveBufferSecure.empty()
-                            && !open
-                        ) {
-                            if (brokenDelegate != nullptr) {
-                                lock.unlock();
-                                brokenDelegate(false);
-                                lock.lock();
-                            }
-                        }
                     } else {
                         tryRead = false;
                     }
+                }
+                if (
+                    receiveBufferSecure.empty()
+                    && !open
+                ) {
+                    diagnosticsSender.SendDiagnosticInformationString(
+                        0, "Last received data processed before remote end closed"
+                    );
+                    break;
                 }
                 wakeCondition.wait(
                     lock,
@@ -354,16 +370,29 @@ namespace TlsDecorator {
                 diagnosticsSender.SendDiagnosticInformationString(
                     0, "Closed gracefully"
                 );
-                lock.unlock();
-                if (lowerLayer != nullptr) {
-                    lowerLayer->Close(true);
+            } else {
+                diagnosticsSender.SendDiagnosticInformationString(
+                    0, "Closed abruptly"
+                );
+            }
+            if (!brokenPublished) {
+                brokenPublished = true;
+                if (brokenDelegate != nullptr) {
+                    lock.unlock();
+                    brokenDelegate(false);
+                    lock.lock();
                 }
             }
+            lock.unlock();
+            lowerLayer->Close(false);
         }
     };
 
     TlsDecorator::~TlsDecorator() noexcept {
         Close(false);
+        if (impl_->worker.joinable()) {
+            impl_->worker.join();
+        }
     }
 
     TlsDecorator::TlsDecorator()
@@ -409,6 +438,13 @@ namespace TlsDecorator {
     }
 
     bool TlsDecorator::Connect(uint32_t peerAddress, uint16_t peerPort) {
+        if (impl_->mode != Impl::Mode::Client) {
+            impl_->diagnosticsSender.SendDiagnosticInformationString(
+                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                "Connect called without first configuring as client"
+            );
+            return false;
+        }
         return impl_->lowerLayer->Connect(peerAddress, peerPort);
     }
 
@@ -438,25 +474,33 @@ namespace TlsDecorator {
                 selectedTlsShim->tls_config_free(p);
             }
         );
+
+        selectedTlsShim->tls_config_set_protocols(impl_->tlsConfig.get(), TLS_PROTOCOLS_DEFAULT);
+        (void)selectedTlsShim->tls_config_set_ca_mem(
+            impl_->tlsConfig.get(),
+            impl_->caCerts.data(),
+            impl_->caCerts.size()
+        );
+
         const auto tlsImplDeleter = [](tls* p) {
             selectedTlsShim->tls_close(p);
             selectedTlsShim->tls_free(p);
         };
         if (impl_->mode == Impl::Mode::Client) {
-            impl_->tlsImpl = decltype(impl_->tlsImpl)(
+            impl_->tlsConnectionImpl = decltype(impl_->tlsConnectionImpl)(
                 selectedTlsShim->tls_client(),
                 tlsImplDeleter
             );
-            (void)selectedTlsShim->tls_config_set_ca_mem(
-                impl_->tlsConfig.get(),
-                impl_->caCerts.data(),
-                impl_->caCerts.size()
-            );
+            if (selectedTlsShim->tls_configure(impl_->tlsConnectionImpl.get(), impl_->tlsConfig.get()) != 0) {
+                const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsConnectionImpl.get());
+                impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "tls_configure -> error: %s",
+                    tlsErrorMessage
+                );
+                return false;
+            }
         } else {
-            impl_->tlsImpl = decltype(impl_->tlsImpl)(
-                selectedTlsShim->tls_server(),
-                tlsImplDeleter
-            );
             (void)selectedTlsShim->tls_config_set_cert_mem(
                 impl_->tlsConfig.get(),
                 impl_->cert.data(),
@@ -467,7 +511,9 @@ namespace TlsDecorator {
                     impl_->key.data(),
                     (int)impl_->key.size()
                 ),
-                [](BIO* p){ selectedTlsShim->BIO_free_all(p); }
+                [](BIO* p){
+                    selectedTlsShim->BIO_free_all(p);
+                }
             );
             std::unique_ptr< EVP_PKEY, std::function< void(EVP_PKEY*) > > key(
                 selectedTlsShim->PEM_read_bio_PrivateKey(
@@ -476,7 +522,9 @@ namespace TlsDecorator {
                     NULL,
                     (void*)impl_->password.c_str()
                 ),
-                [](EVP_PKEY* p){ selectedTlsShim->EVP_PKEY_free(p); }
+                [](EVP_PKEY* p){
+                    selectedTlsShim->EVP_PKEY_free(p);
+                }
             );
             if (key == NULL) {
                 impl_->diagnosticsSender.SendDiagnosticInformationString(
@@ -487,7 +535,9 @@ namespace TlsDecorator {
             }
             std::unique_ptr< BIO, std::function< void(BIO*) > > decryptedKeyOutput(
                 selectedTlsShim->BIO_new(BIO_s_mem()),
-                [](BIO* p){ selectedTlsShim->BIO_free_all(p); }
+                [](BIO* p){
+                    selectedTlsShim->BIO_free_all(p);
+                }
             );
             if (
                 !selectedTlsShim->PEM_write_bio_PrivateKey(
@@ -519,76 +569,104 @@ namespace TlsDecorator {
                 (const uint8_t*)decryptedKeyContents,
                 decryptedKeySize
             );
-        }
-
-        selectedTlsShim->tls_config_set_protocols(impl_->tlsConfig.get(), TLS_PROTOCOLS_DEFAULT);
-
-        if (selectedTlsShim->tls_configure(impl_->tlsImpl.get(), impl_->tlsConfig.get()) != 0) {
-            const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsImpl.get());
-            impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
-                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
-                "tls_configure -> error: %s",
-                tlsErrorMessage
+            impl_->tlsServerImpl = decltype(impl_->tlsServerImpl)(
+                selectedTlsShim->tls_server(),
+                tlsImplDeleter
             );
-            return false;
+            if (selectedTlsShim->tls_configure(impl_->tlsServerImpl.get(), impl_->tlsConfig.get()) != 0) {
+                const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsServerImpl.get());
+                impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "tls_configure -> error: %s",
+                    tlsErrorMessage
+                );
+                return false;
+            }
         }
-        if (
-            selectedTlsShim->tls_connect_cbs(
-                impl_->tlsImpl.get(),
-                [](struct tls *_ctx, void *_buf, size_t _buflen, void *_cb_arg){
-                    const auto self = (TlsDecorator*)_cb_arg;
-                    std::lock_guard< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
-                    const auto amt = std::min(_buflen, self->impl_->receiveBufferSecure.size());
-                    if (
-                        (amt == 0)
-                        && self->impl_->open
-                    ) {
-                        self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
-                            0, "_read_cb(%zu) -> TLS_WANT_POLLIN", _buflen
-                        );
-                        return (ssize_t)TLS_WANT_POLLIN;
-                    }
-                    self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
-                        0, "_read_cb(%zu) -> %zu (of %zu)", _buflen, amt, self->impl_->receiveBufferSecure.size()
-                    );
-                    self->impl_->canWrite = true;
-                    (void)memcpy(_buf, self->impl_->receiveBufferSecure.data(), amt);
-                    if (amt == self->impl_->receiveBufferSecure.size()) {
-                        self->impl_->receiveBufferSecure.clear();
-                    } else {
-                        self->impl_->receiveBufferSecure.erase(
-                            self->impl_->receiveBufferSecure.begin(),
-                            self->impl_->receiveBufferSecure.begin() + amt
-                        );
-                    }
-                    return (ssize_t)amt;
-                },
-                [](struct tls *_ctx, const void *_buf, size_t _buflen, void *_cb_arg){
-                    const auto self = (TlsDecorator*)_cb_arg;
-                    std::unique_lock< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
-                    self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
-                        0, "_write_cb(%zu)", _buflen
-                    );
-                    if (self->impl_->open) {
-                        const auto bufBytes = (const uint8_t*)_buf;
-                        lock.unlock();
-                        self->impl_->lowerLayer->SendMessage(
-                            std::vector< uint8_t >(bufBytes, bufBytes + _buflen)
-                        );
-                    }
-                    return (ssize_t)_buflen;
-                },
-                this,
-                impl_->serverName.c_str()
-            ) != 0
-        ) {
-            const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsImpl.get());
-            impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
-                SystemAbstractions::DiagnosticsSender::Levels::ERROR,
-                "tls_connect_cbs -> error: %s",
-                tlsErrorMessage
+        tls_read_cb _read_cb = [](struct tls *_ctx, void *_buf, size_t _buflen, void *_cb_arg){
+            const auto self = (TlsDecorator*)_cb_arg;
+            std::lock_guard< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
+            const auto amt = std::min(_buflen, self->impl_->receiveBufferSecure.size());
+            if (
+                (amt == 0)
+                && self->impl_->open
+            ) {
+                self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                    0, "_read_cb(%zu) -> TLS_WANT_POLLIN", _buflen
+                );
+                return (ssize_t)TLS_WANT_POLLIN;
+            }
+            self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                0, "_read_cb(%zu) -> %zu (of %zu)", _buflen, amt, self->impl_->receiveBufferSecure.size()
             );
-            return false;
+            self->impl_->canWrite = true;
+            (void)memcpy(_buf, self->impl_->receiveBufferSecure.data(), amt);
+            if (amt == self->impl_->receiveBufferSecure.size()) {
+                self->impl_->receiveBufferSecure.clear();
+            } else {
+                self->impl_->receiveBufferSecure.erase(
+                    self->impl_->receiveBufferSecure.begin(),
+                    self->impl_->receiveBufferSecure.begin() + amt
+                );
+            }
+            return (ssize_t)amt;
+        };
+        tls_write_cb _write_cb = [](struct tls *_ctx, const void *_buf, size_t _buflen, void *_cb_arg){
+            const auto self = (TlsDecorator*)_cb_arg;
+            std::unique_lock< decltype(self->impl_->mutex) > lock(self->impl_->mutex);
+            self->impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                0, "_write_cb(%zu) while %s", _buflen, (self->impl_->open ? "open" : "closed")
+            );
+            if (self->impl_->open) {
+                const auto bufBytes = (const uint8_t*)_buf;
+                lock.unlock();
+                self->impl_->lowerLayer->SendMessage(
+                    std::vector< uint8_t >(bufBytes, bufBytes + _buflen)
+                );
+            }
+            return (ssize_t)_buflen;
+        };
+        if (impl_->mode == Impl::Mode::Client) {
+            if (
+                selectedTlsShim->tls_connect_cbs(
+                    impl_->tlsConnectionImpl.get(),
+                    _read_cb,
+                    _write_cb,
+                    this,
+                    impl_->serverName.c_str()
+                ) != 0
+            ) {
+                const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsConnectionImpl.get());
+                impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "tls_connect_cbs -> error: %s",
+                    tlsErrorMessage
+                );
+                return false;
+            }
+        } else {
+            tls* clientContext;
+            if (
+                selectedTlsShim->tls_accept_cbs(
+                    impl_->tlsServerImpl.get(),
+                    &clientContext,
+                    _read_cb,
+                    _write_cb,
+                    this
+                ) != 0
+            ) {
+                const auto tlsErrorMessage = selectedTlsShim->tls_error(impl_->tlsServerImpl.get());
+                impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
+                    SystemAbstractions::DiagnosticsSender::Levels::ERROR,
+                    "tls_accept_cbs -> error: %s",
+                    tlsErrorMessage
+                );
+                return false;
+            }
+            impl_->tlsConnectionImpl = decltype(impl_->tlsConnectionImpl)(
+                clientContext,
+                tlsImplDeleter
+            );
         }
         if (
             !impl_->lowerLayer->Process(
@@ -604,27 +682,55 @@ namespace TlsDecorator {
     }
 
     uint32_t TlsDecorator::GetPeerAddress() const {
+        if (impl_->lowerLayer == nullptr) {
+            return 0;
+        }
         return impl_->lowerLayer->GetPeerAddress();
     }
 
     uint16_t TlsDecorator::GetPeerPort() const {
+        if (impl_->lowerLayer == nullptr) {
+            return 0;
+        }
         return impl_->lowerLayer->GetPeerPort();
     }
 
     bool TlsDecorator::IsConnected() const {
+        if (impl_->lowerLayer == nullptr) {
+            return false;
+        }
         return impl_->lowerLayer->IsConnected();
     }
 
     uint32_t TlsDecorator::GetBoundAddress() const {
+        if (impl_->lowerLayer == nullptr) {
+            return 0;
+        }
         return impl_->lowerLayer->GetBoundAddress();
     }
 
     uint16_t TlsDecorator::GetBoundPort() const {
+        if (impl_->lowerLayer == nullptr) {
+            return 0;
+        }
         return impl_->lowerLayer->GetBoundPort();
     }
 
     void TlsDecorator::SendMessage(const std::vector< uint8_t >& message) {
         std::unique_lock< decltype(impl_->mutex) > lock(impl_->mutex);
+        if (
+            impl_->upperLayerClosed
+            || (
+                impl_->stopWorker
+                && impl_->worker.joinable()
+            )
+        ) {
+            impl_->diagnosticsSender.SendDiagnosticInformationString(
+                SystemAbstractions::DiagnosticsSender::Levels::WARNING,
+                "send, but already closing"
+            );
+            return;
+        }
         impl_->diagnosticsSender.SendDiagnosticInformationFormatted(
             0, "send(%zu)", message.size()
         );
@@ -639,24 +745,25 @@ namespace TlsDecorator {
     void TlsDecorator::Close(bool clean) {
         std::unique_lock< decltype(impl_->mutex) > lock(impl_->mutex);
         if (!impl_->worker.joinable()) {
+            if (impl_->lowerLayer != nullptr) {
+                impl_->lowerLayer->Close(clean);
+            }
             return;
         }
-        impl_->upperLayerClosed = true;
         if (
-            !impl_->sendBuffer.empty()
-            && clean
+            clean
+            && !impl_->upperLayerClosed
         ) {
-            impl_->diagnosticsSender.SendDiagnosticInformationString(
-                0, "Closing gracefully"
-            );
-            return;
+            impl_->upperLayerClosed = true;
+            if (!impl_->sendBuffer.empty()) {
+                impl_->diagnosticsSender.SendDiagnosticInformationString(
+                    0, "Closing gracefully"
+                );
+                return;
+            }
         }
         impl_->stopWorker = true;
-        if (std::this_thread::get_id() != impl_->worker.get_id()) {
-            impl_->wakeCondition.notify_all();
-            lock.unlock();
-            impl_->worker.join();
-        }
+        impl_->wakeCondition.notify_all();
     }
 
 }
