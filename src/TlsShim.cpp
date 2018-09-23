@@ -112,6 +112,12 @@ namespace TlsDecorator {
         return ::tls_connect_cbs(_ctx, _read_cb, _write_cb, _cb_arg, _servername);
     }
 
+    int TlsShim::tls_accept_cbs(struct tls *_ctx, struct tls **_cctx,
+        tls_read_cb _read_cb, tls_write_cb _write_cb, void *_cb_arg)
+    {
+        return ::tls_accept_cbs(_ctx, _cctx, _read_cb, _write_cb, _cb_arg);
+    }
+
     ssize_t TlsShim::tls_read(struct tls *_ctx, void *_buf, size_t _buflen) {
         return ::tls_read(_ctx, _buf, _buflen);
     }

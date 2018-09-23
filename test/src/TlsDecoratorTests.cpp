@@ -31,6 +31,7 @@ namespace {
 
         bool tlsServerMode = false;
         bool tlsConnectCalled = false;
+        bool tlsAcceptCalled = false;
         bool tlsConfigProtocolSetCalled = false;
         uint32_t tlsConfigProtocolSetProtocols = 0;
         bool tlsConfigureCalled = false;
@@ -196,6 +197,16 @@ namespace {
             tls_write_cb _write_cb, void *_cb_arg, const char *_servername) override
         {
             tlsConnectCalled = true;
+            tlsReadCb = _read_cb;
+            tlsWriteCb = _write_cb;
+            tlsCbArg = _cb_arg;
+            return 0;
+        }
+
+        virtual int tls_accept_cbs(struct tls *_ctx, struct tls **_cctx,
+            tls_read_cb _read_cb, tls_write_cb _write_cb, void *_cb_arg) override
+        {
+            tlsAcceptCalled = true;
             tlsReadCb = _read_cb;
             tlsWriteCb = _write_cb;
             tlsCbArg = _cb_arg;
