@@ -14,6 +14,7 @@
 #include <string>
 #include <SystemAbstractions/DiagnosticsSender.hpp>
 #include <SystemAbstractions/StringExtensions.hpp>
+#include <thread>
 #include <TlsDecorator/TlsDecorator.hpp>
 #include <TlsDecorator/TlsShim.hpp>
 #include <vector>

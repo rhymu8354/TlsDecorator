@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <stddef.h>
+#include <string.h>
 #include <SystemAbstractions/DiagnosticsSender.hpp>
 #include <thread>
 #include <TlsDecorator/TlsShim.hpp>
