@@ -264,7 +264,9 @@ namespace TlsDecorator {
                     diagnosticsSender.SendDiagnosticInformationString(
                         0, "tls_handshake"
                     );
+                    lock.unlock();
                     const auto handshakeResult = selectedTlsShim->tls_handshake(tlsConnectionImpl.get());
+                    lock.lock();
                     if (handshakeResult == 0) {
                         diagnosticsSender.SendDiagnosticInformationString(
                             0, "tls_handshake -> complete"
