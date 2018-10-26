@@ -466,6 +466,7 @@ namespace TlsDecorator {
             return;
         }
         impl_->lowerLayer = lowerLayer;
+        impl_->lowerLayer->SubscribeToDiagnostics(impl_->diagnosticsSender.Chain());
         impl_->caCerts.assign(caCerts.begin(), caCerts.end());
         impl_->serverName = serverName;
         impl_->mode = Impl::Mode::Client;
@@ -481,6 +482,7 @@ namespace TlsDecorator {
             return;
         }
         impl_->lowerLayer = lowerLayer;
+        impl_->lowerLayer->SubscribeToDiagnostics(impl_->diagnosticsSender.Chain());
         impl_->cert.assign(cert.begin(), cert.end());
         impl_->key.assign(key.begin(), key.end());
         impl_->password = password;
