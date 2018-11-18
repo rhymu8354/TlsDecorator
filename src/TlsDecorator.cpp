@@ -446,6 +446,8 @@ namespace TlsDecorator {
         if (impl_->worker.joinable()) {
             impl_->worker.join();
         }
+        impl_->tlsConnectionImpl.reset();
+        impl_->tlsServerImpl.reset();
     }
 
     TlsDecorator::TlsDecorator()
