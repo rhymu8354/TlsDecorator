@@ -29,7 +29,9 @@ namespace {
 
 namespace TlsDecorator {
 
-    struct TlsDecorator::Impl {
+    struct TlsDecorator::Impl
+        : public std::enable_shared_from_this< TlsDecorator::Impl >
+    {
         // Types
 
         /**
@@ -444,7 +446,11 @@ namespace TlsDecorator {
     TlsDecorator::~TlsDecorator() noexcept {
         Close(false);
         if (impl_->worker.joinable()) {
-            impl_->worker.join();
+            if (std::this_thread::get_id() == impl_->worker.get_id()) {
+                impl_->worker.detach();
+            } else {
+                impl_->worker.join();
+            }
         }
         impl_->tlsConnectionImpl.reset();
         impl_->tlsServerImpl.reset();
@@ -738,7 +744,10 @@ namespace TlsDecorator {
             return false;
         }
         impl_->stopWorker = false;
-        impl_->worker = std::thread(&TlsDecorator::Impl::Worker, impl_.get());
+        const auto self = impl_;
+        impl_->worker = std::thread(
+            [self]{ self->Worker(); }
+        );
         return true;
     }
 
