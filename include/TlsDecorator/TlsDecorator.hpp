@@ -109,6 +109,17 @@ namespace TlsDecorator {
             const std::string& password
         );
 
+        /**
+         * Turn off the underlying mechanisms which verify certificates.
+         *
+         * @note
+         *     DO NOT DO THIS UNLESS YOU ARE AWARE OF THE CONSEQUENCES.
+         *     Basically this hamstrings the entire trust relationship.
+         *     It really only makes sense to do this if you already trust
+         *     the peer (for example, within a test framework).
+         */
+        void DisableCertificateVerification();
+
         // SystemAbstractions::INetworkConnection
     public:
         virtual SystemAbstractions::DiagnosticsSender::UnsubscribeDelegate SubscribeToDiagnostics(

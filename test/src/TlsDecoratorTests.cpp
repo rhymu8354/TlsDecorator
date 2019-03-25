@@ -55,6 +55,7 @@ namespace {
         std::vector< uint8_t > tlsReadDecryptedBuf;
         std::condition_variable wakeCondition;
         std::mutex mutex;
+        bool certificateVerificationDisabled = false;
 
         // Methods
 
@@ -142,6 +143,7 @@ namespace {
         }
 
         virtual void tls_config_insecure_noverifycert(struct tls_config *_config) override {
+            certificateVerificationDisabled = true;
         }
 
         virtual void tls_config_insecure_noverifyname(struct tls_config *_config) override {
@@ -582,7 +584,7 @@ TEST_F(TlsDecoratorTests, ConnectForwardedWithoutStartingTls) {
     EXPECT_FALSE(mockTls.tlsConnectCalled);
 }
 
-TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessing) {
+TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessingCertificateVerificationEnabled) {
     decorator.ConfigureAsClient(
         std::shared_ptr< MockConnection >(
             &mockConnection,
@@ -598,6 +600,33 @@ TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessing) {
             [](bool graceful){}
         )
     );
+    EXPECT_FALSE(mockTls.certificateVerificationDisabled);
+    EXPECT_TRUE(mockTls.tlsConfigProtocolSetCalled);
+    EXPECT_EQ(TLS_PROTOCOLS_DEFAULT, mockTls.tlsConfigProtocolSetProtocols);
+    EXPECT_TRUE(mockTls.tlsConfigureCalled);
+    EXPECT_TRUE(mockTls.tlsConnectCalled);
+    EXPECT_FALSE(mockTls.tlsServerMode);
+    EXPECT_TRUE(mockConnection.processCalled);
+}
+
+TEST_F(TlsDecoratorTests, ProcessStartsTlsAndConnectionProcessingCertificateVerificationDisabled) {
+    decorator.ConfigureAsClient(
+        std::shared_ptr< MockConnection >(
+            &mockConnection,
+            [](MockConnection*){}
+        ),
+        "Pretend there are certificates here, ok?",
+        "Pepe"
+    );
+    decorator.DisableCertificateVerification();
+    (void)decorator.Connect(42, 99);
+    EXPECT_TRUE(
+        decorator.Process(
+            [](const std::vector< uint8_t >& message){},
+            [](bool graceful){}
+        )
+    );
+    EXPECT_TRUE(mockTls.certificateVerificationDisabled);
     EXPECT_TRUE(mockTls.tlsConfigProtocolSetCalled);
     EXPECT_EQ(TLS_PROTOCOLS_DEFAULT, mockTls.tlsConfigProtocolSetProtocols);
     EXPECT_TRUE(mockTls.tlsConfigureCalled);

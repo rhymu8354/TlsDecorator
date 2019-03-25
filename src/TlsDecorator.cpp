@@ -113,6 +113,12 @@ namespace TlsDecorator {
         Mode mode = Mode::None;
 
         /**
+         * If set to true, tls_config_insecure_noverifycert will be called
+         * to disable certificate verification.
+         */
+        bool disableCertificateVerification = false;
+
+        /**
          * This is the concatenation of the root Certificate Authority
          * (CA) certificates to trust, in PEM format.
          */
@@ -497,6 +503,10 @@ namespace TlsDecorator {
         impl_->mode = Impl::Mode::Server;
     }
 
+    void TlsDecorator::DisableCertificateVerification() {
+        impl_->disableCertificateVerification = true;
+    }
+
     SystemAbstractions::DiagnosticsSender::UnsubscribeDelegate TlsDecorator::SubscribeToDiagnostics(
         SystemAbstractions::DiagnosticsSender::DiagnosticMessageDelegate delegate,
         size_t minLevel
@@ -541,6 +551,10 @@ namespace TlsDecorator {
                 selectedTlsShim->tls_config_free(p);
             }
         );
+
+        if (impl_->disableCertificateVerification) {
+            selectedTlsShim->tls_config_insecure_noverifycert(impl_->tlsConfig.get());
+        }
 
         selectedTlsShim->tls_config_set_protocols(impl_->tlsConfig.get(), TLS_PROTOCOLS_DEFAULT);
         (void)selectedTlsShim->tls_config_set_ca_mem(
