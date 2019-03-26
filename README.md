@@ -27,6 +27,8 @@ There are two distinct steps in the build process:
 
 * [CMake](https://cmake.org/) version 3.8 or newer
 * C++11 toolchain compatible with CMake for your development platform (e.g. [Visual Studio](https://www.visualstudio.com/) on Windows)
+* [googletest](https://github.com/google/googletest.git) - The Google C++ Test
+  framework
 * [SystemAbstractions](https://github.com/rhymu8354/SystemAbstractions.git) - a
   cross-platform adapter library for system services whose APIs vary from one
   operating system to another
