@@ -12,8 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
+#include <StringExtensions/StringExtensions.hpp>
 #include <SystemAbstractions/DiagnosticsSender.hpp>
-#include <SystemAbstractions/StringExtensions.hpp>
 #include <thread>
 #include <TlsDecorator/TlsDecorator.hpp>
 #include <TlsDecorator/TlsShim.hpp>
@@ -450,7 +450,7 @@ struct TlsDecoratorTests
                 std::string message
             ){
                 diagnosticMessages.push_back(
-                    SystemAbstractions::sprintf(
+                    StringExtensions::sprintf(
                         "%s[%zu]: %s",
                         senderName.c_str(),
                         level,
@@ -476,7 +476,7 @@ TEST_F(TlsDecoratorTests, DiagnosticsSubscription) {
             std::string message
         ){
             capturedDiagnosticMessages.push_back(
-                SystemAbstractions::sprintf(
+                StringExtensions::sprintf(
                     "%s[%zu]: %s",
                     senderName.c_str(),
                     level,
@@ -529,7 +529,7 @@ TEST_F(TlsDecoratorTests, DiagnosticsUnsubscription) {
             std::string message
         ){
             capturedDiagnosticMessages.push_back(
-                SystemAbstractions::sprintf(
+                StringExtensions::sprintf(
                     "%s[%zu]: %s",
                     senderName.c_str(),
                     level,
@@ -1030,7 +1030,7 @@ TEST_F(TlsDecoratorTests, ProcessWhenAlreadyProcessing) {
             std::string message
         ){
             capturedDiagnosticMessages.push_back(
-                SystemAbstractions::sprintf(
+                StringExtensions::sprintf(
                     "%s[%zu]: %s",
                     senderName.c_str(),
                     level,
