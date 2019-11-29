@@ -108,7 +108,7 @@ namespace TlsDecorator {
         std::unique_ptr< tls_config, std::function< void(tls_config*) > > tlsConfig;
 
         /**
-         * This indiates the current mode of the decorator.
+         * This indicates the current mode of the decorator.
          */
         Mode mode = Mode::None;
 
